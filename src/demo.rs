@@ -155,7 +155,14 @@ impl DemoWatcher {
         let file_path = self.current_demo.clone()?;
 
         self.read_next_bytes()
-            .map_err(|e| tracing::error!("Failed reading bytes from demo {file_path:?}: {e}"))
+            .map_err(|e| {
+                match e.kind() {
+                    // If the demo file was deleted, it will be taken care of upstream.
+                    // We dont need to raise an error about it.
+                    std::io::ErrorKind::NotFound => tracing::debug!("Failed reading bytes from demo {file_path:?}: {e}"),
+                    _ => tracing::error!("Failed reading bytes from demo {file_path:?}: {e}")}
+                }
+            )
             .ok()
             .flatten()
             .map(|b| DemoBytes {
@@ -190,6 +197,14 @@ impl<M: Is<DemoBytes>> MessageSource<M> for DemoWatcher {
                             self.current_demo = Some(path.clone());
                             self.offset = 0;
                             return self.next_bytes().map(Into::into);
+                        }
+                    }
+                    notify::event::EventKind::Remove(_) => {
+                        let file_path = self.current_demo.as_ref();
+                        if file_path.is_some_and(|p| p == path && !path.exists()) {
+                            tracing::debug!("Demo file was deleted {file_path:?}");
+                            self.current_demo = None;
+                            return None;
                         }
                     }
                     _ => {}
